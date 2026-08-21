@@ -1,0 +1,49 @@
+[project]
+name = "transplant-survival-model"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "lightgbm==4.5.0",
+    "miceforest==6.0.5",
+    "numpy==2.5.2",
+    "pandas==3.0.5",
+    "pyarrow==25.0.1",
+    "pytest>=9.1.1",
+    "scikit-learn==1.9.0",
+    "scipy>=1.18.0",
+    "torch==2.5.1",
+]
+
+[project.optional-dependencies]
+# Deep-learning baselines. Kept optional because the classical pipeline and the
+# whole rp_core test suite run without them; `uv sync --extra deep` adds them.
+deep = [
+    "pycox==0.3.0",
+    "torchtuples==0.2.2",
+    "auton-survival==0.1.0",
+    "tqdm>=4.66",
+]
+
+[tool.uv]
+# auton-survival carries stale upper pins - torch==1.13.1 (no cp312 wheels) and
+# pandas<2.0 - which make a plain resolve fail outright. Only its DSM code is
+# used here, through numpy arrays, and the deep-baseline tests exercise that
+# path against the versions below. Overriding is what makes the environment
+# reproducible from this file; the alternative was `--no-deps` plus an
+# undeclared package, which is how it became unreproducible in the first place.
+#
+# If auton-survival is ever used for more than DSM fit/predict, re-check these:
+# the pins are being overridden on the strength of the tests, not upstream's word.
+override-dependencies = [
+    "torch==2.5.1",
+    "torchvision>=0.20",
+    "pandas>=3.0.5",
+    "numpy>=2.5.2",
+    "scikit-learn>=1.9.0",
+    "scikit-survival>=0.28.0",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+]
