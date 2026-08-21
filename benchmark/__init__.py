@@ -17,6 +17,10 @@ from .covariate_splines import (CovariateSplineSpec, apply_covariate_splines,
                                 describe, events_per_variable,
                                 fit_covariate_splines)
 
+from .tuning import (SEARCH_SPACES, assert_tunable, make_cv_folds,
+                     random_search, score_fold, search_space_table,
+                     tuning_summary)
+
 __all__ = [
     "SurvivalBaseline", "BenchmarkCell", "run_benchmark", "derive_seed",
     "records_from_evaluation", "coherence_table", "RECORD_COLUMNS",
@@ -24,5 +28,7 @@ __all__ = [
     "RSFBaseline", "MinimalReferenceBaseline", "make_default_baselines",
     "time_knots",
     "CovariateSplineSpec", "fit_covariate_splines", "apply_covariate_splines",
-    "events_per_variable", "describe",
+    "events_per_variable", "describe",     "SEARCH_SPACES", "assert_tunable", 
+    "make_cv_folds", "random_search",
+    "score_fold", "search_space_table", "tuning_summary",
 ]
