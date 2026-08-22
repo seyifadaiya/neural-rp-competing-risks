@@ -7,10 +7,17 @@ timestamped, and neither touches the temporal or exploratory windows.
 |---|---|---|
 | `01_rsf_benchmark.ipynb` | RSF across the 5 development folds + a full-development fit, at m = 1 | hours; the probe cell projects it before launch |
 | `02_tuning.ipynb` | 30-configuration random search for all five models on fold 0 | dominated by Neural Fine-Gray |
+| `03_development_matrix.ipynb` | The other 9 models across 5 folds x 5 imputations + `dev_full` — 270 cells | 2–3 hours |
 
-`io_helpers.py` holds everything both need: the loader, the two guards, the
-RSF production options, and the Variant A/B adapter. `make_notebooks.py`
-regenerates the notebooks — edit that, not the `.ipynb` JSON.
+Run them in order: 03 consumes `selected_configs.json` from 02 and concatenates
+`rsf_results.parquet` from 01 at analysis time. It does **not** re-run RSF.
+
+`io_helpers.py` holds everything they share: the loader, the two guards, the
+RSF production options, the Variant A/B adapter, the spline-column lookup, and
+the null-model Brier table. `make_notebooks.py` regenerates the notebooks —
+edit that, not the `.ipynb` JSON. Notebook 03's cells live in `_nb3_cells.py`,
+because its cell bodies are themselves triple-quoted strings and nesting those
+inside another triple-quoted block truncates silently.
 
 ## Before running
 
@@ -68,3 +75,9 @@ need real data and hours.
   to a second fold; report that result.
 - **Whatever RSF settings the probe cell prints.** An RSF at 300 trees is not
   an RSF at 1000.
+- **DeepHit's `num_durations` came from a search run before a discretisation
+  bug was fixed.** pycox's Kaplan-Meier sums event codes, so competing-risks
+  codes 0/1/2 counted every cause-2 event twice and the quantile bins were
+  placed too early. The bug is fixed, but `selected_configs.json` predates the
+  fix, so DeepHit's bin count is a fixed fair configuration rather than a tuned
+  optimum. Either re-run the DeepHit arm of notebook 02 (~1 hour) or say so.

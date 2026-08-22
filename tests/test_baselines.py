@@ -235,6 +235,72 @@ def test_2_coherence_table(fitted, data):
         "less coherent than the shared-survival formulation")
 
 
+def test_2b_rp_coherence_is_quadrature_error(fitted, data):
+    """The Royston-Parmar residual must FALL with the node count.
+
+    This is what licenses calling it quadrature error rather than a defect.
+    A fixed residual, or one that wandered, would mean something structural
+    was wrong instead.
+
+    It also means the number is meaningless unless the node count is quoted
+    alongside it: the same model on the same data reads 3.0e-05 at 10 nodes
+    and 6.8e-08 at 40. Two figures from different tasks differing by an order
+    of magnitude is therefore expected, not a discrepancy - they are different
+    fitted models on different data, not the same number measured twice.
+    """
+    m = fitted["royston_parmar"][0]
+    devs = {}
+    for nodes in (10, 20, 40):
+        cif = m.predict_cif(data["Xte"], T_EVAL, n_nodes=nodes)
+        surv = m.predict_survival(data["Xte"], T_EVAL)
+        devs[nodes] = float(np.abs(cif.sum(-1) + surv - 1).max())
+    print("\n  RP coherence vs quadrature nodes")
+    for k, v in devs.items():
+        print(f"    n_nodes={k:3d}  {v:.3e}")
+    assert devs[20] < devs[10] / 5, "refining the quadrature must help"
+    assert devs[40] < devs[20] / 5, "and keep helping"
+
+
+def test_2c_coherence_paths_are_independent(fitted, data):
+    """fine_gray and rsf land within ~1% of each other; confirm that is
+    coincidence rather than a shared artefact of the clipped-complement path.
+
+    They arrive by opposite routes. Fine-Gray has no joint survival, so the
+    harness uses clip(1 - F1 - F2, 0, 1) and its residual IS the excess mass.
+    RSF supplies its own reconstructed survival, and its CIFs never exceed 1 -
+    so the clip never engages and the complement path would report exactly
+    zero. If both were riding the clip floor, both would show clip hits.
+    """
+    from benchmark.base import _survival_for
+    seen = {}
+    for name in ("fine_gray", "rsf"):
+        if name not in fitted:
+            continue
+        m = fitted[name][0]
+        cif = m.predict_cif(data["Xte"], T_EVAL)
+        total = cif.sum(-1)
+        hits = int((total > 1.0).sum())
+        dev = float(np.abs(total + _survival_for(m, data["Xte"], T_EVAL, cif)
+                           - 1).max())
+        dev_comp = float(np.abs(total + np.clip(1 - total, 0, 1) - 1).max())
+        seen[name] = (hits, dev, dev_comp, hasattr(m, "predict_survival"))
+        print(f"\n  {name:12s} own_S={seen[name][3]}  clip hits {hits:4d}  "
+              f"dev {dev:.3e}  dev-if-complement {dev_comp:.3e}")
+
+    if "fine_gray" in seen:
+        hits, dev, dev_comp, own = seen["fine_gray"]
+        assert not own, "Fine-Gray must not claim a joint survival it lacks"
+        assert hits > 0 and np.isclose(dev, dev_comp), (
+            "Fine-Gray's residual should BE the excess mass")
+    if "rsf" in seen:
+        hits, dev, dev_comp, own = seen["rsf"]
+        assert own, "RSF supplies its own survival"
+        assert hits == 0 and dev_comp == 0.0, (
+            "RSF's CIFs stay under 1, so the clip path cannot be the source")
+        assert dev > 1e-3, (
+            "RSF's residual comes from its own survival, not from clipping")
+
+
 # ---------------------------------------------------------------------------
 # 3 & 4. Against the published R implementations
 # ---------------------------------------------------------------------------
@@ -245,24 +311,17 @@ def _rscript(code, arr, header):
     os.close(fd)
     np.savetxt(path, arr, delimiter=",", header=header, comments="")
     try:
-        r = subprocess.run(
-            ["Rscript", "-e", code.replace("__CSV__", path.replace("\\", "/"))],
-            capture_output=True, text=True, timeout=600)
+        r = subprocess.run(["Rscript", "-e", code.replace("__CSV__", path.replace("\\", "/"))],
+                           capture_output=True, text=True, timeout=600)
         os.unlink(path)
+        
         if r.returncode != 0:
             print(f"  [_rscript] R failed:\n{r.stderr[-500:]}")
             return None
-        return r.stdout.strip() or None
-    except Exception as exc:
-        print(f"  [_rscript] {type(exc).__name__}: {exc}")
-        return None
         
-        """r = subprocess.run(["Rscript", "-e", code.replace("__CSV__", path)],
-                           capture_output=True, text=True, timeout=600)
-        os.unlink(path)
         return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
     except Exception:
-        return None"""
+        return None
 
 
 def test_3_cox_matches_r(data):

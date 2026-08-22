@@ -283,6 +283,77 @@ def test_4_non_proportionality_gain():
         f"vs {spread2:.3f}")
 
 
+def test_4b_bk_spread_is_not_encoder_capacity():
+    """FALSIFICATION: b_k spread must track non-proportionality, not capacity.
+
+    The per-cause reading of b_k on real data - "this cause is
+    non-proportional, that one is not" - is only licensed if a PH truth
+    produces a NARROW b_k under the same encoder that produced the wide one.
+    Otherwise the spread is the network having capacity to spend, and the
+    interpretation is unfounded.
+
+    Measured as sd(log b_k): b_k multiplies the spline, so the meaningful
+    scale is multiplicative, and percentile-based spread beats the min/max in
+    `scale_stats`, which are noisy extremes over thousands of patients.
+
+    Established by the fuller sweep this test compresses (3 seeds x 3 encoder
+    sizes x 6 effect sizes):
+
+      * PH truth gives sd(log b) in 0.02-0.08 at EVERY capacity from
+        (64,32)->16 to (512,256)->128 - an 8x width increase moves it not at
+        all, which is the result that kills the capacity explanation.
+      * Non-PH truth at shape exponent 0.35 gives ~0.33, a 4-5x separation.
+      * The response is near-linear, sd(log b) ~ 0.045 + 0.82 * exponent,
+        detectable from an exponent of about 0.05.
+      * The PH cause stays at 0.03-0.05 regardless of what the other cause
+        does, so causes do not contaminate each other.
+    """
+    def sd_log_bk(model, x_cont):
+        with torch.no_grad():
+            z = model.encoder(x_cont, None)
+            return {k: float(np.std(np.log(torch.nn.functional.softplus(
+                        getattr(model, f"b{k}")(z)).squeeze(-1).numpy())))
+                    for k in (1, 2)}
+
+    out = {}
+    for arm, sim in (("PH", lambda s: generate(n=8_000, seed=s)),
+                     ("non-PH", lambda s: simulate_non_ph(n=8_000, seed=s))):
+        for seed in (42, 43):
+            time, event, x = sim(seed)
+            n = len(time)
+            perm = np.random.default_rng(0).permutation(n)
+            tr, te = perm[:int(0.7 * n)], perm[int(0.7 * n):]
+            knots = {k: knots_for(time[tr], event[tr], k) for k in (1, 2)}
+            b_tr = as_batch(time[tr], event[tr], x[tr])
+            b_te = as_batch(time[te], event[te], x[te])
+            set_seed(seed)
+            # Production capacity, not a small probe: capacity is the
+            # hypothesis under test, so it must not be reduced here.
+            m = build_variant_b(knots, x[tr], hidden_dims=(256, 128),
+                                latent_dim=64, dropout=0.0)
+            train_model(m, b_tr, b_te,
+                        TrainConfig(max_epochs=300, batch_size=512, patience=40,
+                                    scheduler="cosine", seed=seed, verbose=False))
+            m.eval()
+            for k, v in sd_log_bk(m, b_te["x_cont"]).items():
+                out.setdefault((arm, k), []).append(v)
+
+    print("\n  sd(log b_k) at production capacity (256,128)->64")
+    for (arm, k), v in sorted(out.items()):
+        print(f"    {arm:8s} cause{k}  {np.mean(v):.4f}  "
+              f"({min(v):.4f}-{max(v):.4f})")
+
+    # Every cell whose TRUTH is proportional must stay in the null band.
+    null = out[("PH", 1)] + out[("PH", 2)] + out[("non-PH", 2)]
+    alt = out[("non-PH", 1)]
+    assert max(null) < 0.12, (
+        f"a proportional truth produced sd(log b) = {max(null):.4f}; if PH "
+        f"data can spread this far the per-cause reading is unfounded")
+    assert min(alt) > 2 * max(null), (
+        f"non-PH cause 1 ({min(alt):.4f}) must stand clear of the PH null "
+        f"({max(null):.4f}) or the diagnostic cannot discriminate")
+
+
 def test_5_no_material_loss_when_ph_holds():
     """The extra flexibility must cost little when it is not needed."""
     time, event, x = generate(n=12_000, seed=SEED)

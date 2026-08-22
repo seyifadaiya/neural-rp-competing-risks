@@ -267,6 +267,49 @@ def test_2b_dsm_upstream_returns_a_net_probability_not_a_cif(data):
     assert ours.sum(-1).max() <= 1 + 1e-9
 
 
+def test_2c_deephit_bins_come_from_a_binary_kaplan_meier(data):
+    """DeepHit's quantile cuts must be placed from a BINARY Kaplan-Meier.
+
+    pycox builds them from its own KM, whose inner loop is `di[idx] +=
+    events[i]` - it SUMS the event codes, and its docstring says "events array
+    0/1". Handing it competing-risks codes 0/1/2 counts every cause-2 event as
+    two deaths: the curve falls too fast, the bins bunch up early, and where
+    enough cause-2 events coincide `di` exceeds `ni`, survival goes negative
+    and the cut search runs off the end with an IndexError.
+
+    This asserts the fitted cuts match the binary-KM cuts and NOT the
+    raw-code ones, so the two can never be confused again.
+    """
+    _skip_unless(DeepHitBaseline)
+    from pycox.preprocessing.discretization import cuts_quantiles
+
+    m = DeepHitBaseline(n_continuous=N_CONT, cardinalities=CARDS, seed=SEED,
+                        config=FAST)
+    m.fit(data["Xtr"], data["ttr"], data["etr"])
+    fitted = np.asarray(m._duration_index, dtype=np.float64)
+
+    t = np.maximum(np.asarray(data["ttr"], dtype=np.float64), 1e-8)
+    e = np.asarray(data["etr"]).astype(np.int64)
+    want = cuts_quantiles(t, (e > 0).astype(np.int64), FAST.num_durations,
+                          0.0, "float64")
+    print(f"\n  fitted cuts   {np.round(fitted[:5], 4)} ... {fitted[-1]:.4f}")
+    print(f"  binary-KM     {np.round(want[:5], 4)} ... {want[-1]:.4f}")
+    assert np.allclose(fitted, want), (
+        "DeepHit's bins are not the binary-KM quantile cuts; the event codes "
+        "are reaching pycox's Kaplan-Meier unbinarised")
+
+    # And the corrupted placement must be genuinely different, or this test
+    # would pass for the wrong reason.
+    try:
+        raw = cuts_quantiles(t, e, FAST.num_durations, 0.0, "float64")
+    except Exception:
+        return                      # raw codes crashed outright - also fine
+    if len(raw) == len(want):
+        assert not np.allclose(raw, want), (
+            "raw-code and binary cuts coincide on this data, so the test "
+            "cannot detect the bug - use data with more cause-2 events")
+
+
 # ---------------------------------------------------------------------------
 # 3. Recovers a known CIF
 # ---------------------------------------------------------------------------

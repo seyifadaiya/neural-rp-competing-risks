@@ -353,12 +353,13 @@ def rsf_factory(columns=None, **kw):
 # Post-run checks
 # ---------------------------------------------------------------------------
 
-def beats_null(results, null_brier=None):
+def beats_null(results: pd.DataFrame, null_brier: dict | None = None) -> pd.DataFrame:
     """Per (model, fold, cause, horizon): is the Brier score better than the
     marginal predictor's?
 
     `null_brier` maps (cause, horizon) -> Brier of the Aalen-Johansen marginal.
-    Without it, beats_null is left as NaN — "unknown" must not read as "passed".
+    Without it, the check falls back to the weaker statement that the Brier
+    score is finite and below 0.25 (the worst a probability can do at p=0.5).
     """
     out = results.copy()
     
@@ -381,17 +382,14 @@ def failure_report(results: pd.DataFrame) -> pd.DataFrame:
     """Cells worth looking at before trusting anything: non-convergence, or a
     model that failed to beat the null."""
     checked = beats_null(results)
-    
-    conv  = checked["converged"].fillna(True).astype(bool).to_numpy()
+    # numpy bools, not `~` on an object column: `~True` is -2 there, which is
+    # truthy, so every row would be flagged.
+    conv = checked["converged"].fillna(True).astype(bool).to_numpy()
     beats = checked["beats_null"].fillna(True).astype(bool).to_numpy()
     bad = checked[(~conv) | (~beats)]
-    
-    #bad = checked[(~checked["converged"].fillna(True))
-                  #| (~checked["beats_null"].fillna(True))]
     cols = ["model", "fold", "imputation", "eval_set", "cause", "horizon",
             "brier", "null_brier", "converged", "beats_null"]
     return bad[[c for c in cols if c in bad.columns]]
-
 
 def add_rp_core_to_path(repo_root=None) -> Path:
     """Put `rp_core` on `sys.path` without assuming a working directory."""
@@ -595,3 +593,87 @@ def variant_factory(variant: str, n_continuous, cardinalities, columns=None,
                                cardinalities=cardinalities, columns=columns,
                                seed=seed, **{**fixed, **dict(config)})
     return make
+
+
+# ---------------------------------------------------------------------------
+# Pieces the full development matrix needs
+# ---------------------------------------------------------------------------
+
+def spline_columns_for(loaded: dict) -> list:
+    """The CONTINUOUS column names in a loaded set, from its `FeatureSpec`.
+
+    The classical baselines take `spline_columns` so the choice of what gets a
+    restricted cubic spline is explicit. Left unset they fall back to a
+    >=20-distinct-values heuristic, which is a safety net rather than a
+    specification - it would expand a many-levelled ordinal by accident and
+    silently change the comparator.
+
+    Read from the spec rather than inferred from the array: in the one-hot
+    representation the continuous block is followed by indicator columns, and
+    nothing in the array itself marks the boundary.
+    """
+    path = loaded.get("spec_path")
+    if not path:
+        raise KeyError(
+            f"{loaded.get('applied_to')} has no spec on disk, so the continuous "
+            f"columns cannot be identified. Pass spline_columns explicitly "
+            f"rather than letting the cardinality heuristic decide.")
+    with open(path) as fh:
+        spec = json.load(fh)
+    cont = [str(c) for c in spec.get("continuous_order", [])]
+    present = [c for c in cont if c in set(loaded["columns"])]
+    if not present:
+        raise ValueError(
+            f"none of the spec's continuous columns appear in "
+            f"{loaded.get('applied_to')}'s {loaded.get('representation')} "
+            f"columns; the set and the spec disagree")
+    return present
+
+
+def null_brier_table(features_dir, folds, imputation, t_eval,
+                     causes=CAUSES) -> pd.DataFrame:
+    """Brier score of an intercept-only predictor, per (fold, cause, horizon).
+
+    The null is the Aalen-Johansen marginal fitted on each fold's TRAINING
+    rows and applied to everyone in its test set - the same split the models
+    face. Any model that cannot beat this has not learned anything from the
+    covariates, whatever else its numbers look like.
+
+    Computed per fold rather than once, because the folds differ in event mix
+    and a single pooled threshold would flatter some folds and penalise others.
+    Only outcome columns are read, so this is cheap.
+    """
+    from metrics import aalen_johansen, brier_score
+
+    t_eval = np.atleast_1d(np.asarray(t_eval, dtype=np.float64))
+    rows = []
+    for f in folds:
+        fit, test = fold_sets(f)
+        tr = load_set(features_dir, fit, fit, imputation, "onehot")
+        te = load_set(features_dir, fit, test, imputation, "onehot")
+        marginal = np.zeros((te["n_rows"], len(t_eval), len(causes)))
+        for k in causes:
+            est, _ = aalen_johansen(tr["time"], tr["event"], t_eval, cause=k,
+                                    variance=False)
+            marginal[:, :, k - 1] = np.asarray(est, dtype=np.float64)[None, :]
+        bs = brier_score(marginal, te["time"], te["event"], t_eval)
+        for k in causes:
+            for j, t in enumerate(t_eval):
+                rows.append({"fold": int(f), "cause": int(k),
+                             "horizon": float(t),
+                             "null_brier": float(bs[k][j])})
+    return pd.DataFrame(rows)
+
+
+def flag_against_null(results: pd.DataFrame, null_table: pd.DataFrame,
+                      eval_set: str = "test") -> pd.DataFrame:
+    """Join the per-fold null onto the results and mark what fails to beat it.
+
+    `dev_full` rows are scored in-sample and have no matching null fold, so
+    they are left unflagged rather than compared against a number that does
+    not apply to them.
+    """
+    out = results.merge(null_table, on=["fold", "cause", "horizon"], how="left")
+    out["beats_null"] = np.where(out["null_brier"].notna(),
+                                 out["brier"] < out["null_brier"], np.nan)
+    return out

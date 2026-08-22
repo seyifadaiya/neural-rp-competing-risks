@@ -382,8 +382,28 @@ class DeepHitBaseline(_DeepBaseline):
             """Discretise durations while keeping the CAUSE label.
 
             The base class collapses events to 0/1; competing risks needs the
-            cause index preserved, which is what this override does.
+            cause index preserved, which is what `transform` restores.
+
+            `fit` MUST be given binary events. pycox places quantile cuts from
+            a Kaplan-Meier estimate whose inner loop is
+
+                di[idx] += events[i]
+
+            - it SUMS the event codes, and its docstring says "events array
+            0/1". Passing competing-risks codes 0/1/2 therefore counts every
+            cause-2 event as two deaths. The KM falls too fast (measured: 0.44
+            at t = 5 where the truth was 0.58), the bins are packed too early
+            (first cuts 0.48/0.89/1.40 instead of 0.70/1.33/2.00), and where
+            enough cause-2 events coincide `di` exceeds `ni`, the survival goes
+            negative, and the cut search runs off the end of the array with an
+            IndexError.
+
+            The cause labels are restored in `transform`, which is the only
+            place the competing-risks loss needs them.
             """
+
+            def fit(self, dur, ev):
+                return super().fit(dur, (np.asarray(ev) > 0).astype("int64"))
 
             def transform(self, dur, ev):
                 idx, _ = super().transform(dur, ev > 0)
