@@ -535,8 +535,11 @@ class VariantBaseline:
 
         tcfg = TrainConfig(max_epochs=self.max_epochs,
                            batch_size=self.batch_size, patience=self.patience,
-                           scheduler="cosine", seed=self.seed, verbose=False)
-        train_model(self.model, b_tr, b_va, tcfg)
+                           #scheduler="cosine", 
+                           scheduler=getattr(self, "scheduler", "cosine"),
+                           seed=self.seed, verbose=False)
+        #train_model(self.model, b_tr, b_va, tcfg)
+        self.history, self.ckpt = train_model(self.model, b_tr, b_va, tcfg)
         self.model.eval()
         return self
 

@@ -60,14 +60,15 @@ RECORD_COLUMNS = [
     "citl_predicted", "citl_observed", "citl_difference",
     "coherence_max", "n_rows", "n_events_cause", "fit_seconds",
     "predict_seconds", "calibration_method", "seed", "converged",
-    "null_brier", "beats_null",
+    "null_brier", "beats_null", "f1f2_max",
 ]
 
 
 def records_from_evaluation(result: dict, model: str, fold, imputation,
                             eval_set: str, fit_seconds: float,
                             predict_seconds: float, seed: int,
-                            causes=(1, 2), converged=None, null_result=None) -> list[dict]:
+                            causes=(1, 2), converged=None, null_result=None,
+                            f1f2_max=np.nan) -> list[dict]:
     """Flatten one `evaluate()` result into LONG format - one row per
     (model, fold, imputation, cause, horizon).
 
@@ -106,6 +107,7 @@ def records_from_evaluation(result: dict, model: str, fold, imputation,
                 "citl_observed": c.get("observed_aj", np.nan),
                 "citl_difference": c.get("difference", np.nan),
                 "coherence_max": coherence,
+                "f1f2_max": f1f2_max,
                 "n_rows": result["meta"]["n"],
                 "n_events_cause": result["meta"]["n_events"].get(k, np.nan),
                 "fit_seconds": fit_seconds, "predict_seconds": predict_seconds,
@@ -241,6 +243,7 @@ def run_benchmark(cells, t_eval, output_path, evaluate_fn=None,
                 continue
             t0 = time.time()
             cif = model.predict_cif(data["X"], t_eval)
+            f1f2_max = float(cif.sum(axis=-1).max())
             predict_seconds = time.time() - t0
             surv = _survival_for(model, data["X"], t_eval, cif)
             result = evaluate_fn(cif, data["time"], data["event"], t_eval,
@@ -277,7 +280,8 @@ def run_benchmark(cells, t_eval, output_path, evaluate_fn=None,
                 result, cell.model_name, cell.fold, cell.imputation, name,
                 fit_seconds, predict_seconds, seed,
                 converged=converged if isinstance(converged, dict) else None,
-                null_result=null_result)
+                null_result=null_result,
+                f1f2_max=f1f2_max)
             if verbose:
                 print(f"  {cell.model_name:12s} fold={cell.fold} "
                       f"m={cell.imputation} {name:12s} "
