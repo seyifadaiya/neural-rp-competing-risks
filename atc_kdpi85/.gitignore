@@ -1,0 +1,10 @@
+# Row-level STAR data must never be committed.
+out/wrong_side_kidneys.csv
+out/*_rows*.csv
+!out/cutoffs_by_period.csv
+!out/cutoffs_by_calendar_year.csv
+!out/cohort_flow.csv
+!out/era_counts.csv
+!out/audit_fields.csv
+!out/rd_results.csv
+!out/sensitivity.csv
